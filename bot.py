@@ -2,7 +2,8 @@ import logging
 import os
 import requests
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters  # <-- Tambahkan impor ini
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler
+from telegram.ext import filters  # <-- Impor filters secara terpisah
 
 # Ambil token dari variabel lingkungan
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
