@@ -18,14 +18,15 @@ from solders.signature import Signature
 from solders.rpc.responses import SendTransactionResp
 import snscrape.modules.twitter as sntwitter
 from textblob import TextBlob
-import sqlite3
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
 # Constants
 SOLANA_RPC_URL = "https://api.mainnet-beta.solana.com"
 DEXSCREENER_API_URL = "https://api.dexscreener.com/latest/dex/tokens"
 SOLSNIFFER_URL = "https://solsniffer.com"
-TELEGRAM_BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
-TELEGRAM_CHAT_ID = "YOUR_TELEGRAM_CHAT_ID"
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 KOL_USERNAMES = ["CryptoNobler", "0xChiefy", "Danny_Crypton", "DefiWimar"]
 
 # Initialize Solana client
@@ -39,10 +40,11 @@ wallet = Keypair.from_secret_key(bytes.fromhex(private_key))
 
 # Database setup
 def create_database():
-    conn = sqlite3.connect('memecoins.db')
-    c = conn.cursor()
+    DATABASE_URL = os.getenv("DATABASE_URL")
+    conn = psycopg2.connect(DATABASE_URL, sslmode='require')
+    c = conn.cursor(cursor_factory=RealDictCursor)
     c.execute('''CREATE TABLE IF NOT EXISTS memecoins
-                 (id INTEGER PRIMARY KEY, contract_address TEXT, symbol TEXT, price REAL, volume REAL, source TEXT)''')
+                 (id SERIAL PRIMARY KEY, contract_address TEXT, symbol TEXT, price REAL, volume REAL, source TEXT)''')
     conn.commit()
     conn.close()
 
@@ -111,40 +113,52 @@ def send_telegram_notification(message):
 
 # Buy and sell functions
 def buy_token(token_address, amount_sol=0.01, slippage=15):
-    token_pubkey = Pubkey.from_string(token_address)
-    sol_pubkey = Pubkey.from_string(str(wallet.public_key()))
-    transfer_ix = transfer(SoldersTransferParams(
-        from_pubkey=sol_pubkey,
-        to_pubkey=token_pubkey,
-        lamports=int(amount_sol * 1e9)
-    ))
-    txn = SoldersTransaction().add(transfer_ix)
-    txn.sign(wallet)
-    response = client.send_transaction(txn, opts=TxOpts(skip_preflight=False, preflight_commitment=Confirmed))
-    if response['result']:
-        print(f"Buy transaction successful: {response['result']}")
-    else:
-        print(f"Buy transaction failed: {response}")
+    try:
+        token_pubkey = Pubkey.from_string(token_address)
+        sol_pubkey = Pubkey.from_string(str(wallet.public_key()))
+        transfer_ix = transfer(SoldersTransferParams(
+            from_pubkey=sol_pubkey,
+            to_pubkey=token_pubkey,
+            lamports=int(amount_sol * 1e9 * (1 - slippage / 100))  # Adjust for slippage
+        ))
+        txn = SoldersTransaction().add(transfer_ix)
+        txn.sign(wallet)
+        response = client.send_transaction(txn, opts=TxOpts(skip_preflight=False, preflight_commitment=Confirmed))
+        if response['result']:
+            print(f"Buy transaction successful: {response['result']}")
+            return True
+        else:
+            print(f"Buy transaction failed: {response}")
+            return False
+    except Exception as e:
+        print(f"Error in buy_token: {e}")
+        return False
 
 def sell_token(token_address, profit_target=0.02, moonbag_percent=20):
-    token_balance = client.get_token_account_balance(token_address)
-    if not token_balance['result']:
-        print("Failed to fetch token balance")
-        return
-    balance = token_balance['result']['value']['amount']
-    sell_amount = int(balance * (1 - moonbag_percent / 100))
-    sell_ix = transfer(SoldersTransferParams(
-        from_pubkey=Pubkey.from_string(token_address),
-        to_pubkey=Pubkey.from_string(str(wallet.public_key())),
-        lamports=sell_amount
-    ))
-    txn = SoldersTransaction().add(sell_ix)
-    txn.sign(wallet)
-    response = client.send_transaction(txn, opts=TxOpts(skip_preflight=False, preflight_commitment=Confirmed))
-    if response['result']:
-        print(f"Sell transaction successful: {response['result']}")
-    else:
-        print(f"Sell transaction failed: {response}")
+    try:
+        token_balance = client.get_token_account_balance(token_address)
+        if not token_balance['result']:
+            print("Failed to fetch token balance")
+            return False
+        balance = token_balance['result']['value']['amount']
+        sell_amount = int(balance * (1 - moonbag_percent / 100))
+        sell_ix = transfer(SoldersTransferParams(
+            from_pubkey=Pubkey.from_string(token_address),
+            to_pubkey=Pubkey.from_string(str(wallet.public_key())),
+            lamports=sell_amount
+        ))
+        txn = SoldersTransaction().add(sell_ix)
+        txn.sign(wallet)
+        response = client.send_transaction(txn, opts=TxOpts(skip_preflight=False, preflight_commitment=Confirmed))
+        if response['result']:
+            print(f"Sell transaction successful: {response['result']}")
+            return True
+        else:
+            print(f"Sell transaction failed: {response}")
+            return False
+    except Exception as e:
+        print(f"Error in sell_token: {e}")
+        return False
 
 # Main bot logic
 def main():
@@ -169,9 +183,9 @@ def main():
                 print(f"Token: {symbol}, Price: {price}, Volume: {volume}")
 
             # Buy and sell logic
-            buy_token(address)
-            time.sleep(10)  # Wait for buy to complete
-            sell_token(address)
+            if buy_token(address):
+                time.sleep(10)  # Wait for buy to complete
+                sell_token(address)
 
         time.sleep(3600)  # Run every hour
 
