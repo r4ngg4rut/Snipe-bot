@@ -3,5 +3,5 @@ beautifulsoup4
 solana
 snscrape
 textblob
-sqlite3
+postgres
 psycopg2-binary
