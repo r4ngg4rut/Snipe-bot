@@ -1,86 +1,179 @@
-import logging
 import os
+import time
+import re
 import requests
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler
-from telegram.ext import filters  # <-- Impor filters secara terpisah
+from bs4 import BeautifulSoup
+from solana.rpc.api import Client
+from solana.publickey import PublicKey
+from solana.transaction import Transaction
+from solana.system_program import TransferParams, transfer
+from solana.rpc.types import TxOpts
+from solana.keypair import Keypair
+from solana.rpc.commitment import Confirmed
+from solders.pubkey import Pubkey
+from solders.system_program import TransferParams as SoldersTransferParams
+from solders.transaction import Transaction as SoldersTransaction
+from solders.message import Message
+from solders.signature import Signature
+from solders.rpc.responses import SendTransactionResp
+import snscrape.modules.twitter as sntwitter
+from textblob import TextBlob
+import sqlite3
 
-# Ambil token dari variabel lingkungan
-TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+# Constants
+SOLANA_RPC_URL = "https://api.mainnet-beta.solana.com"
+DEXSCREENER_API_URL = "https://api.dexscreener.com/latest/dex/tokens"
+SOLSNIFFER_URL = "https://solsniffer.com"
+TELEGRAM_BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
+TELEGRAM_CHAT_ID = "YOUR_TELEGRAM_CHAT_ID"
+KOL_USERNAMES = ["CryptoNobler", "0xChiefy", "Danny_Crypton", "DefiWimar"]
 
-if not TOKEN:
-    raise ValueError("Token tidak ditemukan. Pastikan variabel lingkungan TELEGRAM_BOT_TOKEN sudah diatur.")
+# Initialize Solana client
+client = Client(SOLANA_RPC_URL)
 
-# API DexScreener
-DEXSCREENER_API = "https://api.dexscreener.com/latest/dex/tokens/"
+# Load wallet
+private_key = os.getenv("SOLANA_PRIVATE_KEY")
+if not private_key:
+    raise ValueError("Please set the SOLANA_PRIVATE_KEY environment variable.")
+wallet = Keypair.from_secret_key(bytes.fromhex(private_key))
 
-# Setup logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+# Database setup
+def create_database():
+    conn = sqlite3.connect('memecoins.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS memecoins
+                 (id INTEGER PRIMARY KEY, contract_address TEXT, symbol TEXT, price REAL, volume REAL, source TEXT)''')
+    conn.commit()
+    conn.close()
 
-# Command: /start
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Halo! Saya adalah Sniper Bot. Gunakan /help untuk melihat perintah yang tersedia.")
+# Twitter functions
+def get_tweets(username, limit=10):
+    tweets = []
+    for i, tweet in enumerate(sntwitter.TwitterSearchScraper(f'from:{username}').get_items()):
+        if i >= limit:
+            break
+        tweets.append(tweet.content)
+    return tweets
 
-# Command: /help
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("""
-    Perintah yang tersedia:
-    /start - Mulai bot
-    /help - Tampilkan bantuan
-    /snipe <token_address> - Pantau harga token di DexScreener
-    """)
+def extract_tickers(tweets):
+    tickers = set()
+    for tweet in tweets:
+        words = tweet.split()
+        for word in words:
+            if word.startswith('$') and len(word) > 1:
+                tickers.add(word[1:].upper())
+    return list(tickers)
 
-# Command: /snipe
-async def snipe(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        token_address = context.args[0]  # Ambil alamat token dari argumen
-        url = f"{DEXSCREENER_API}{token_address}"
-        response = requests.get(url)
-        
-        if response.status_code == 200:
-            data = response.json()
-            pair = data['pairs'][0]
-            message = (
-                f"🔍 Token: {pair['baseToken']['name']} ({pair['baseToken']['symbol']})\n"
-                f"💰 Harga: ${pair['priceUsd']}\n"
-                f"📈 Pair: {pair['pairAddress']}\n"
-                f"🔄 Volume 24h: ${pair['volume']['h24']}\n"
-                f"📊 Liquidity: ${pair['liquidity']['usd']}"
-            )
-            await update.message.reply_text(message)
+def extract_contract_addresses(tweets):
+    contract_addresses = set()
+    solana_address_pattern = re.compile(r'\b[1-9A-HJ-NP-Za-km-z]{32,44}\b')
+    for tweet in tweets:
+        matches = solana_address_pattern.findall(tweet)
+        contract_addresses.update(matches)
+    return list(contract_addresses)
+
+# DexScreener functions
+def get_token_data(contract_address):
+    url = f"{DEXSCREENER_API_URL}/{contract_address}"
+    response = requests.get(url)
+    if response.status_code == 200:
+        return response.json()["pairs"]
+    else:
+        print(f"Failed to fetch data for contract {contract_address}")
+        return []
+
+# SolSniffer functions
+def get_contract_score(contract_address):
+    url = f"{SOLSNIFFER_URL}/{contract_address}"
+    response = requests.get(url)
+    if response.status_code == 200:
+        soup = BeautifulSoup(response.text, 'html.parser')
+        score_element = soup.find("div", class_="score")
+        if score_element:
+            score = float(score_element.text.strip().replace("%", ""))
+            return score
         else:
-            await update.message.reply_text("Gagal mengambil data dari DexScreener.")
-    except IndexError:
-        await update.message.reply_text("Gunakan format: /snipe <token_address>")
-    except Exception as e:
-        await update.message.reply_text(f"Terjadi error: {e}")
+            print(f"Score element not found for contract {contract_address}")
+            return None
+    else:
+        print(f"Failed to fetch data from SolSniffer for contract {contract_address}")
+        return None
 
-# Handle pesan biasa
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    await update.message.reply_text(f"Anda mengirim: {text}")
+# Telegram notification
+def send_telegram_notification(message):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
+    response = requests.post(url, json=payload)
+    if response.status_code == 200:
+        print("Notification sent successfully")
+    else:
+        print(f"Failed to send notification: {response.text}")
 
-# Handle error
-async def error(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logging.error(f"Update {update} menyebabkan error: {context.error}")
+# Buy and sell functions
+def buy_token(token_address, amount_sol=0.01, slippage=15):
+    token_pubkey = Pubkey.from_string(token_address)
+    sol_pubkey = Pubkey.from_string(str(wallet.public_key()))
+    transfer_ix = transfer(SoldersTransferParams(
+        from_pubkey=sol_pubkey,
+        to_pubkey=token_pubkey,
+        lamports=int(amount_sol * 1e9)
+    ))
+    txn = SoldersTransaction().add(transfer_ix)
+    txn.sign(wallet)
+    response = client.send_transaction(txn, opts=TxOpts(skip_preflight=False, preflight_commitment=Confirmed))
+    if response['result']:
+        print(f"Buy transaction successful: {response['result']}")
+    else:
+        print(f"Buy transaction failed: {response}")
 
-if __name__ == '__main__':
-    # Buat aplikasi bot
-    application = ApplicationBuilder().token(TOKEN).build()
+def sell_token(token_address, profit_target=0.02, moonbag_percent=20):
+    token_balance = client.get_token_account_balance(token_address)
+    if not token_balance['result']:
+        print("Failed to fetch token balance")
+        return
+    balance = token_balance['result']['value']['amount']
+    sell_amount = int(balance * (1 - moonbag_percent / 100))
+    sell_ix = transfer(SoldersTransferParams(
+        from_pubkey=Pubkey.from_string(token_address),
+        to_pubkey=Pubkey.from_string(str(wallet.public_key())),
+        lamports=sell_amount
+    ))
+    txn = SoldersTransaction().add(sell_ix)
+    txn.sign(wallet)
+    response = client.send_transaction(txn, opts=TxOpts(skip_preflight=False, preflight_commitment=Confirmed))
+    if response['result']:
+        print(f"Sell transaction successful: {response['result']}")
+    else:
+        print(f"Sell transaction failed: {response}")
 
-    # Tambahkan handler untuk command
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("snipe", snipe))
+# Main bot logic
+def main():
+    create_database()
+    while True:
+        all_contract_addresses = []
+        for username in KOL_USERNAMES:
+            tweets = get_tweets(username)
+            contract_addresses = extract_contract_addresses(tweets)
+            all_contract_addresses.extend(contract_addresses)
 
-    # Tambahkan handler untuk pesan biasa
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        for address in all_contract_addresses:
+            score = get_contract_score(address)
+            if score is not None and score < 85:
+                send_telegram_notification(f"⚠️ Contract {address} has a low score: {score}%")
 
-    # Tambahkan handler untuk error
-    application.add_error_handler(error)
+            token_data = get_token_data(address)
+            for pair in token_data:
+                symbol = pair['baseToken']['symbol']
+                price = float(pair['priceUsd'])
+                volume = float(pair['volume']['h24'])
+                print(f"Token: {symbol}, Price: {price}, Volume: {volume}")
 
-    # Jalankan bot
-    application.run_polling()
+            # Buy and sell logic
+            buy_token(address)
+            time.sleep(10)  # Wait for buy to complete
+            sell_token(address)
+
+        time.sleep(3600)  # Run every hour
+
+if __name__ == "__main__":
+    main()
