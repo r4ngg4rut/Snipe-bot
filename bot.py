@@ -4,15 +4,14 @@ import re
 import requests
 from bs4 import BeautifulSoup
 from solana.rpc.api import Client
-from solana.publickey import PublicKey
-from solana.transaction import Transaction
-from solana.system_program import TransferParams, transfer
 from solana.rpc.types import TxOpts
 from solana.keypair import Keypair
 from solana.rpc.commitment import Confirmed
+
+# Use 'solders' instead of 'solana.publickey'
 from solders.pubkey import Pubkey
-from solders.system_program import TransferParams as SoldersTransferParams
-from solders.transaction import Transaction as SoldersTransaction
+from solders.system_program import TransferParams
+from solders.transaction import Transaction
 from solders.message import Message
 from solders.signature import Signature
 from solders.rpc.responses import SendTransactionResp
