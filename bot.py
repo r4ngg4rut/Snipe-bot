@@ -32,7 +32,7 @@ KOL_USERNAMES = ["CryptoNobler", "0xChiefy", "Danny_Crypton", "DefiWimar"]
 client = Client(SOLANA_RPC_URL)
 
 # Load wallet
-private_key = os.getenv("your_base58_private_key_here")
+private_key = os.environ.get("your_base58_private_key_here")
 if not private_key:
     raise ValueError("Please set the SOLANA_PRIVATE_KEY environment variable.")
 wallet = Keypair.from_base58_string(private_key)
