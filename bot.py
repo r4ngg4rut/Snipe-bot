@@ -35,7 +35,7 @@ client = Client(SOLANA_RPC_URL)
 private_key = os.getenv("SOLANA_PRIVATE_KEY")
 if not private_key:
     raise ValueError("Please set the SOLANA_PRIVATE_KEY environment variable.")
-wallet = Keypair.from_secret_key(bytes.fromhex(private_key))
+wallet = Keypair.from_bytes(bytes.fromhex(private_key))
 
 # Database setup
 def create_database():
