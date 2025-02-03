@@ -5,10 +5,10 @@ import requests
 from bs4 import BeautifulSoup
 from solana.rpc.api import Client
 from solana.rpc.types import TxOpts
-from solana.keypair import Keypair
 from solana.rpc.commitment import Confirmed
 
-# Use 'solders' instead of 'solana.publickey'
+# Replace solana.keypair with solders.keypair
+from solders.keypair import Keypair
 from solders.pubkey import Pubkey
 from solders.system_program import TransferParams
 from solders.transaction import Transaction
