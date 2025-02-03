@@ -31,7 +31,7 @@ solana_client = Client(RPC_URL)
 
 # ✅ 5. Cek balance wallet sebelum transaksi
 try:
-    balance = solana_client.get_balance(wallet.pubkey())["result"]["value"]
+    balance = solana_client.get_balance(wallet.pubkey()).value  # Akses balance menggunakan .value
     print(f"💰 Wallet Balance: {balance / 1e9} SOL")
     
     if balance == 0:
