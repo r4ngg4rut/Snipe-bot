@@ -18,10 +18,10 @@ print(f"🔍 5 karakter pertama: {private_key[:5]}...")  # Jangan print full pri
 try:
     if private_key.startswith("["):  # Jika private key berbentuk JSON array
         private_key_bytes = bytes(json.loads(private_key))
-    else:  # Jika private key berbentuk Base58
-        private_key_bytes = Keypair.from_base58_string(private_key).to_bytes()
+        wallet = Keypair.from_bytes(private_key_bytes)
+    else:  # Jika private key berbentuk Base58, gunakan langsung
+        wallet = Keypair.from_base58_string(private_key)
 
-    wallet = Keypair.from_bytes(private_key_bytes)
 except Exception as e:
     raise ValueError(f"❌ Gagal memproses private key: {e}")
 
