@@ -32,10 +32,10 @@ KOL_USERNAMES = ["CryptoNobler", "0xChiefy", "Danny_Crypton", "DefiWimar"]
 client = Client(SOLANA_RPC_URL)
 
 # Load wallet
-private_key = os.getenv("SOLANA_PRIVATE_KEY")
+private_key = os.getenv("your_base58_private_key_here")
 if not private_key:
     raise ValueError("Please set the SOLANA_PRIVATE_KEY environment variable.")
-wallet = Keypair.from_bytes(bytes.fromhex(private_key))
+wallet = Keypair.from_base58_string(private_key)
 
 # Database setup
 def create_database():
